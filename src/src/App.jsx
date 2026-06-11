@@ -1,4 +1,9 @@
-import React from 'react'
-import ReactDOM from 'react-dom/client'
-import App from './App.jsx'
-ReactDOM.createRoot(document.getElementById('root')).render(<App />)
+function App() {
+  return (
+    <div>
+      <h1>PaperMaster AI</h1>
+      <p>Coming Soon!</p>
+    </div>
+    )
+}
+export default App
