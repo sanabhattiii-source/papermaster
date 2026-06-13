@@ -285,13 +285,14 @@ Every question MUST be strictly from the covered syllabus: "${topicStr}"
 Include answer_hint for all non-MCQ questions.`;
 
     try{
-      const res=await fetch("https://api.anthropic.com/v1/messages",{
+      const apiKey = import.meta.env.VITE_GEMINI_KEY;
+      const res=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,{
         method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,
-          messages:[{role:"user",content:prompt}]})
+        body:JSON.stringify({contents:[{parts:[{text:prompt}]}],
+          generationConfig:{temperature:0.7,maxOutputTokens:2000}})
       });
       const data=await res.json();
-      const txt=data.content.map(i=>i.text||"").join("");
+      const txt=data.candidates?.[0]?.content?.parts?.[0]?.text||"";
       const clean=txt.replace(/```json|```/g,"").trim();
       const parsed=JSON.parse(clean);
       setPaper(parsed);
