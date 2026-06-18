@@ -297,40 +297,40 @@ Rules:
 - Make ${totalM} total marks distributed across sections`;
 
     try {
-      const apiKey = import.meta.env.VITE_GEMINI_KEY;
+      const apiKey = import.meta.env.VITE_ANTHROPIC_KEY;
       if(!apiKey) {
-        setError("❌ API Key نہیں ملی — Vercel → Settings → Environment Variables میں VITE_GEMINI_KEY ڈالیں");
+        setError("❌ API Key نہیں ملی — Vercel → Settings → Environment Variables میں VITE_ANTHROPIC_KEY ڈالیں");
         setLoading(false); return;
       }
 
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
-        {
-          method: "POST",
-          headers: {"Content-Type":"application/json"},
-          body: JSON.stringify({
-            contents: [{parts: [{text: prompt}]}],
-            generationConfig: {
-              temperature: 0.5,
-              maxOutputTokens: 3000
-            }
-          })
-        }
-      );
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+          "anthropic-dangerous-direct-browser-access": "true"
+        },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 2000,
+          messages: [{role: "user", content: prompt}]
+        })
+      });
 
       const data = await res.json();
 
       if(data.error) {
-        if(data.error.code===429)
-          setError("⏳ 1 منٹ انتظار کریں پھر دوبارہ کوشش کریں — مفت سروس کی حد ہے");
-        else if(data.error.code===400)
+        if(data.error.type==="authentication_error")
           setError("❌ API Key غلط ہے — Vercel میں دوبارہ چیک کریں");
+        else if(data.error.type==="rate_limit_error")
+          setError("⏳ تھوڑا انتظار کریں پھر دوبارہ کوشش کریں");
         else
-          setError("❌ خرابی: " + data.error.message);
+          setError("❌ خرابی: " + (data.error.message||"نامعلوم"));
         setLoading(false); return;
       }
 
-      const txt = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+      const txt = data.content?.[0]?.text || "";
       if(!txt) {
         setError("❌ AI نے جواب نہیں دیا — دوبارہ کوشش کریں");
         setLoading(false); return;
