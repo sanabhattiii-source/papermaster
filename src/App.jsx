@@ -305,58 +305,89 @@ Replace [Urdu question about ${topicStr}] with REAL Urdu questions. Replace opti
     try {
       const apiKey = import.meta.env.VITE_ANTHROPIC_KEY;
       if(!apiKey) {
-        setError("❌ API Key نہیں ملی — Vercel → Settings → Environment Variables میں VITE_ANTHROPIC_KEY ڈالیں");
+        setError("❌ API Key نہیں ملی — Vercel میں VITE_ANTHROPIC_KEY ڈالیں");
         setLoading(false); return;
       }
 
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-          "anthropic-dangerous-direct-browser-access": "true"
-        },
-        body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
-          max_tokens: 4000,
-          messages: [{role: "user", content: prompt}]
-        })
-      });
+      const callAI = async (userPrompt, maxTok=1500) => {
+        const r = await fetch("https://api.anthropic.com/v1/messages", {
+          method:"POST",
+          headers:{
+            "Content-Type":"application/json",
+            "x-api-key": apiKey,
+            "anthropic-version":"2023-06-01",
+            "anthropic-dangerous-direct-browser-access":"true"
+          },
+          body: JSON.stringify({
+            model:"claude-haiku-4-5-20251001",
+            max_tokens: maxTok,
+            messages:[{role:"user", content: userPrompt}]
+          })
+        });
+        const d = await r.json();
+        if(d.error) throw new Error(d.error.message||"API Error");
+        return d.content?.[0]?.text||"";
+      };
 
-      const data = await res.json();
+      // Step 1: Get header info
+      const headerPrompt = `Return ONLY this JSON for a Pakistani school exam paper (fill in values, no extra text):
+{"subject":"${subName}","class":"${clsLabel}","level":"${lvlName}","examType":"${examLabel}","topic":"${topicStr}","school":"${schoolName||"گورنمنٹ اسکول"}","totalMarks":${totalM},"time":"${timeStr}","instructions":["تمام سوالات حل کریں","صاف لکھیں","نقل سے پرہیز کریں"]}`;
 
-      if(data.error) {
-        if(data.error.type==="authentication_error")
-          setError("❌ API Key غلط ہے — Vercel میں دوبارہ چیک کریں");
-        else if(data.error.type==="rate_limit_error")
-          setError("⏳ تھوڑا انتظار کریں پھر دوبارہ کوشش کریں");
-        else
-          setError("❌ خرابی: " + (data.error.message||"نامعلوم"));
-        setLoading(false); return;
+      const headerTxt = await callAI(headerPrompt, 500);
+      const headerClean = headerTxt.replace(/```json|```/g,"").trim();
+      const header = JSON.parse(headerClean);
+
+      // Step 2: Get sections separately
+      const sections = [];
+      const mcqM = Math.round(totalM * 0.4);
+      const shortM = Math.round(totalM * 0.35);
+      const longM = totalM - mcqM - shortM;
+
+      if(qtypes.includes("mcq")) {
+        const mcqCount = totalM <= 25 ? 5 : totalM <= 50 ? 8 : 10;
+        const mcqPrompt = `Return ONLY a JSON array of ${mcqCount} MCQ questions about "${topicStr}" for class ${clsLabel} ${subName}. Each object: {"no":1,"text":"اردو سوال","options":["A. ","B. ","C. ","D. "],"answer":"A","marks":1}. Only JSON array, no extra text.`;
+        const mcqTxt = await callAI(mcqPrompt, 1500);
+        const mcqClean = mcqTxt.replace(/```json|```/g,"").trim();
+        const mcqQs = JSON.parse(mcqClean);
+        sections.push({
+          type:"MCQ",
+          title:"حصہ الف — کثیر انتخابی سوالات",
+          marks: mcqM,
+          instruction:"درست جواب کے سامنے دائرہ لگائیں",
+          questions: mcqQs
+        });
       }
 
-      const txt = data.content?.[0]?.text || "";
-      if(!txt) {
-        setError("❌ AI نے جواب نہیں دیا — دوبارہ کوشش کریں");
-        setLoading(false); return;
+      if(qtypes.includes("short")) {
+        const shortCount = totalM <= 25 ? 3 : totalM <= 50 ? 5 : 6;
+        const shortPrompt = `Return ONLY a JSON array of ${shortCount} short questions about "${topicStr}" for class ${clsLabel} ${subName}. Each object: {"no":1,"text":"اردو سوال","marks":${Math.round(shortM/(totalM<=25?3:totalM<=50?5:6))},"answer_hint":"مختصر جواب"}. Only JSON array, no extra text.`;
+        const shortTxt = await callAI(shortPrompt, 1000);
+        const shortClean = shortTxt.replace(/```json|```/g,"").trim();
+        const shortQs = JSON.parse(shortClean);
+        sections.push({
+          type:"SHORT",
+          title:"حصہ ب — مختصر سوالات",
+          marks: shortM,
+          instruction:"کسی بھی پانچ سوالات کے مختصر جواب لکھیں",
+          questions: shortQs
+        });
       }
 
-      let clean = txt.replace(/```json|```/g,"").trim();
-      // Fix truncated JSON
-      const lastBrace = clean.lastIndexOf("}");
-      const lastBracket = clean.lastIndexOf("]");
-      if(lastBrace > 0) {
-        clean = clean.substring(0, lastBrace+1);
-        // Balance brackets
-        const opens = (clean.match(/{/g)||[]).length;
-        const closes = (clean.match(/}/g)||[]).length;
-        if(opens > closes) clean += "}".repeat(opens-closes);
-        const aopens = (clean.match(/\[/g)||[]).length;
-        const acloses = (clean.match(/\]/g)||[]).length;
-        if(aopens > acloses) clean = clean.replace(/,?\s*$/, "") + "]" + "}".repeat(opens-closes);
+      if(qtypes.includes("long")) {
+        const longPrompt = `Return ONLY a JSON array of 2 long questions about "${topicStr}" for class ${clsLabel} ${subName}. Each object: {"no":1,"text":"اردو سوال","marks":${Math.round(longM/2)},"subparts":["(الف) حصہ","(ب) حصہ"],"answer_hint":"تفصیلی جواب"}. Only JSON array, no extra text.`;
+        const longTxt = await callAI(longPrompt, 800);
+        const longClean = longTxt.replace(/```json|```/g,"").trim();
+        const longQs = JSON.parse(longClean);
+        sections.push({
+          type:"LONG",
+          title:"حصہ ج — تفصیلی سوالات",
+          marks: longM,
+          instruction:"کسی بھی دو سوالات کے تفصیلی جواب لکھیں",
+          questions: longQs
+        });
       }
-      const parsed = JSON.parse(clean);
+
+      const parsed = {...header, sections};
 
       setPaper(parsed);
       setAnswers({}); setSubmitted(false); setScore(null);
