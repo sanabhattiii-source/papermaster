@@ -251,50 +251,14 @@ export default function App() {
     const timeStr  = (examType&&examType!=="custom") ? EXAM_TYPES.find(e=>e.id===examType)?.time  : "2 گھنٹے";
     const diffStr  = diff==="easy"?"آسان":diff==="medium"?"درمیانہ":"مشکل";
 
-    const prompt = `You are a Pakistani school exam paper creator.
-Class: ${clsLabel} (${lvlName}) | Subject: ${subName} | Exam: ${examLabel}
-Covered syllabus: "${topicStr}"
-Question types needed: ${qtNames}
-Difficulty: ${diffStr} | Total marks: ${totalM} | Time: ${timeStr}
-School: ${schoolName||"گورنمنٹ اسکول"}
+    const prompt = `Pakistani school exam paper. Return ONLY valid JSON, no extra text.
+Subject: ${subName} | Class: ${clsLabel} | Topic: "${topicStr}" | Marks: ${totalM} | Time: ${timeStr}
+Types: ${qtNames} | Difficulty: ${diffStr} | Questions: ${qCount}
 
-IMPORTANT: Return ONLY a valid JSON object. No markdown. No explanation. Just JSON.
-The JSON must have this exact structure:
-{
-  "subject": "${subName}",
-  "class": "${clsLabel}",
-  "level": "${lvlName}",
-  "examType": "${examLabel}",
-  "topic": "${topicStr}",
-  "school": "${schoolName||"گورنمنٹ اسکول"}",
-  "totalMarks": ${totalM},
-  "time": "${timeStr}",
-  "instructions": ["ہدایت نمبر 1", "ہدایت نمبر 2"],
-  "sections": [
-    {
-      "type": "MCQ",
-      "title": "حصہ الف — کثیر انتخابی سوالات",
-      "marks": 10,
-      "instruction": "درست جواب پر دائرہ لگائیں",
-      "questions": [
-        {
-          "no": 1,
-          "text": "سوال کا متن یہاں",
-          "options": ["A. پہلا آپشن", "B. دوسرا آپشن", "C. تیسرا آپشن", "D. چوتھا آپشن"],
-          "answer": "A",
-          "marks": 1
-        }
-      ]
-    }
-  ]
-}
-Rules:
-- Only add sections for these types: ${qtypes.join(", ")}
-- MCQ sections need "options" and "answer" fields
-- SHORT/LONG sections need "answer_hint" field
-- All questions must be from: "${topicStr}"
-- Use Urdu language for questions
-- Make ${totalM} total marks distributed across sections`;
+JSON structure:
+{"subject":"${subName}","class":"${clsLabel}","level":"${lvlName}","examType":"${examLabel}","topic":"${topicStr}","school":"${schoolName||"گورنمنٹ اسکول"}","totalMarks":${totalM},"time":"${timeStr}","instructions":["تمام سوالات لازمی ہیں","غیر واضح لکھائی نظرانداز ہوگی"],"sections":[{"type":"MCQ","title":"حصہ الف","marks":${Math.round(totalM*0.4)},"instruction":"درست جواب پر دائرہ لگائیں","questions":[{"no":1,"text":"سوال","options":["A. ","B. ","C. ","D. "],"answer":"A","marks":1}]},{"type":"SHORT","title":"حصہ ب","marks":${Math.round(totalM*0.6)},"instruction":"مختصر جواب لکھیں","questions":[{"no":1,"text":"سوال","marks":3,"answer_hint":"جواب"}]}]}
+
+Rules: Only include sections for types: ${qtypes.join(",")}. Urdu questions. From topic only. Keep JSON short.`;
 
     try {
       const apiKey = import.meta.env.VITE_ANTHROPIC_KEY;
@@ -336,7 +300,20 @@ Rules:
         setLoading(false); return;
       }
 
-      const clean = txt.replace(/```json|```/g,"").trim();
+      let clean = txt.replace(/```json|```/g,"").trim();
+      // Fix truncated JSON
+      const lastBrace = clean.lastIndexOf("}");
+      const lastBracket = clean.lastIndexOf("]");
+      if(lastBrace > 0) {
+        clean = clean.substring(0, lastBrace+1);
+        // Balance brackets
+        const opens = (clean.match(/{/g)||[]).length;
+        const closes = (clean.match(/}/g)||[]).length;
+        if(opens > closes) clean += "}".repeat(opens-closes);
+        const aopens = (clean.match(/\[/g)||[]).length;
+        const acloses = (clean.match(/\]/g)||[]).length;
+        if(aopens > acloses) clean = clean.replace(/,?\s*$/, "") + "]" + "}".repeat(opens-closes);
+      }
       const parsed = JSON.parse(clean);
 
       setPaper(parsed);
