@@ -251,14 +251,56 @@ export default function App() {
     const timeStr  = (examType&&examType!=="custom") ? EXAM_TYPES.find(e=>e.id===examType)?.time  : "2 گھنٹے";
     const diffStr  = diff==="easy"?"آسان":diff==="medium"?"درمیانہ":"مشکل";
 
-    const prompt = `Pakistani school exam paper. Return ONLY valid JSON, no extra text.
-Subject: ${subName} | Class: ${clsLabel} | Topic: "${topicStr}" | Marks: ${totalM} | Time: ${timeStr}
-Types: ${qtNames} | Difficulty: ${diffStr} | Questions: ${qCount}
+    // Build prompt based on selected question types
+    const mcqCount = totalM <= 25 ? 5 : totalM <= 50 ? 10 : 15;
+    const shortCount = totalM <= 25 ? 3 : totalM <= 50 ? 5 : 8;
+    const mcqMarks = qtypes.includes("mcq") ? Math.round(totalM * 0.4) : 0;
+    const shortMarks = qtypes.includes("short") ? totalM - mcqMarks : 0;
 
-JSON structure:
-{"subject":"${subName}","class":"${clsLabel}","level":"${lvlName}","examType":"${examLabel}","topic":"${topicStr}","school":"${schoolName||"گورنمنٹ اسکول"}","totalMarks":${totalM},"time":"${timeStr}","instructions":["تمام سوالات لازمی ہیں","غیر واضح لکھائی نظرانداز ہوگی"],"sections":[{"type":"MCQ","title":"حصہ الف","marks":${Math.round(totalM*0.4)},"instruction":"درست جواب پر دائرہ لگائیں","questions":[{"no":1,"text":"سوال","options":["A. ","B. ","C. ","D. "],"answer":"A","marks":1}]},{"type":"SHORT","title":"حصہ ب","marks":${Math.round(totalM*0.6)},"instruction":"مختصر جواب لکھیں","questions":[{"no":1,"text":"سوال","marks":3,"answer_hint":"جواب"}]}]}
+    const prompt = `Create a Pakistani school exam paper in JSON format only.
+Topic: "${topicStr}" | Class: ${clsLabel} | Subject: ${subName} | Total: ${totalM} marks
 
-Rules: Only include sections for types: ${qtypes.join(",")}. Urdu questions. From topic only. Keep JSON short.`;
+Return ONLY this JSON (no markdown, no explanation):
+{
+  "subject": "${subName}",
+  "class": "${clsLabel}",
+  "level": "${lvlName}",
+  "examType": "${examLabel}",
+  "topic": "${topicStr}",
+  "school": "${schoolName||"گورنمنٹ اسکول"}",
+  "totalMarks": ${totalM},
+  "time": "${timeStr}",
+  "instructions": ["تمام سوالات لازمی ہیں", "صاف لکھیں"],
+  "sections": [
+    ${qtypes.includes("mcq") ? `{
+      "type": "MCQ",
+      "title": "حصہ الف — کثیر انتخابی",
+      "marks": ${mcqMarks},
+      "instruction": "درست جواب پر دائرہ لگائیں",
+      "questions": [
+        {"no":1,"text":"[Urdu question about ${topicStr}]","options":["A. option1","B. option2","C. option3","D. option4"],"answer":"A","marks":1},
+        {"no":2,"text":"[Urdu question about ${topicStr}]","options":["A. option1","B. option2","C. option3","D. option4"],"answer":"B","marks":1},
+        {"no":3,"text":"[Urdu question about ${topicStr}]","options":["A. option1","B. option2","C. option3","D. option4"],"answer":"C","marks":1},
+        {"no":4,"text":"[Urdu question about ${topicStr}]","options":["A. option1","B. option2","C. option3","D. option4"],"answer":"A","marks":1},
+        {"no":5,"text":"[Urdu question about ${topicStr}]","options":["A. option1","B. option2","C. option3","D. option4"],"answer":"D","marks":1}
+      ]
+    }` : ""}
+    ${qtypes.includes("mcq") && qtypes.includes("short") ? "," : ""}
+    ${qtypes.includes("short") ? `{
+      "type": "SHORT",
+      "title": "حصہ ب — مختصر سوالات",
+      "marks": ${shortMarks},
+      "instruction": "مختصر جواب لکھیں",
+      "questions": [
+        {"no":1,"text":"[Short question about ${topicStr}]","marks":${Math.round(shortMarks/3)},"answer_hint":"brief answer"},
+        {"no":2,"text":"[Short question about ${topicStr}]","marks":${Math.round(shortMarks/3)},"answer_hint":"brief answer"},
+        {"no":3,"text":"[Short question about ${topicStr}]","marks":${Math.round(shortMarks/3)},"answer_hint":"brief answer"}
+      ]
+    }` : ""}
+  ]
+}
+
+Replace [Urdu question about ${topicStr}] with REAL Urdu questions. Replace option1/option2 etc with real options. Replace "brief answer" with real answer hints. Keep JSON valid.`;
 
     try {
       const apiKey = import.meta.env.VITE_ANTHROPIC_KEY;
