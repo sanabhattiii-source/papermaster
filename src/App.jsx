@@ -233,6 +233,63 @@ export default function App() {
 
   const toggleQ = id => setQtypes(p=>p.includes(id)?p.filter(x=>x!==id):[...p,id]);
 
+  // Robust JSON repair - fixes truncated/malformed JSON from AI responses
+  const repairJSON = (text) => {
+    let s = text.replace(/```json|```/g,"").trim();
+    // Find the start of the actual JSON (array or object)
+    const firstBrace = s.indexOf("{");
+    const firstBracket = s.indexOf("[");
+    let start = -1;
+    if(firstBrace>=0 && firstBracket>=0) start = Math.min(firstBrace, firstBracket);
+    else if(firstBrace>=0) start = firstBrace;
+    else if(firstBracket>=0) start = firstBracket;
+    if(start>0) s = s.substring(start);
+
+    // Try direct parse first
+    try { return JSON.parse(s); } catch(e) {}
+
+    // Repair: if string is cut off mid-value, close it properly
+    // Count unescaped quotes to know if we're inside a string
+    let inString = false, escape = false;
+    let lastSafeIdx = -1;
+    const stack = [];
+    for(let i=0;i<s.length;i++){
+      const c = s[i];
+      if(escape){ escape=false; continue; }
+      if(c==="\\"){ escape=true; continue; }
+      if(c==='"'){ inString=!inString; continue; }
+      if(inString) continue;
+      if(c==="{"||c==="[") stack.push(c);
+      if(c==="}"||c==="]") stack.pop();
+      if((c===","||c==="}"||c==="]") && stack.length>=0) lastSafeIdx = i;
+    }
+    // If we ended inside a string, cut back to last safe comma/brace and close it
+    if(inString && lastSafeIdx>=0){
+      s = s.substring(0, lastSafeIdx+1);
+    }
+    // Remove trailing comma before closing
+    s = s.replace(/,\s*$/, "");
+    // Close any remaining open brackets/braces
+    const stack2 = [];
+    inString=false; escape=false;
+    for(let i=0;i<s.length;i++){
+      const c = s[i];
+      if(escape){ escape=false; continue; }
+      if(c==="\\"){ escape=true; continue; }
+      if(c==='"'){ inString=!inString; continue; }
+      if(inString) continue;
+      if(c==="{"||c==="[") stack2.push(c);
+      if(c==="}"||c==="]") stack2.pop();
+    }
+    while(stack2.length>0){
+      const open = stack2.pop();
+      s += open==="{" ? "}" : "]";
+    }
+    try { return JSON.parse(s); } catch(e) {
+      throw new Error("AI کا جواب نامکمل تھا — دوبارہ کوشش کریں");
+    }
+  };
+
   const generate = async () => {
     const topicStr = sylMode==="custom" ? covered : topic;
     if(!classId||!subject||!topicStr.trim()){
@@ -246,61 +303,15 @@ export default function App() {
     const clsLabel = classInfo?.label||classId;
     const lvlName  = {primary:"پرائمری",middle:"مڈل",high:"ہائی اسکول",inter:"انٹرمیڈیٹ"}[level]||"";
     const examLabel= EXAM_TYPES.find(e=>e.id===examType)?.label||"امتحان";
-    const qtNames  = qtypes.map(q=>QTYPES.find(x=>x.id===q)?.urdu).join("، ");
     const totalM   = (examType&&examType!=="custom") ? EXAM_TYPES.find(e=>e.id===examType)?.marks : marks;
     const timeStr  = (examType&&examType!=="custom") ? EXAM_TYPES.find(e=>e.id===examType)?.time  : "2 گھنٹے";
     const diffStr  = diff==="easy"?"آسان":diff==="medium"?"درمیانہ":"مشکل";
 
-    // Build prompt based on selected question types
-    const mcqCount = totalM <= 25 ? 5 : totalM <= 50 ? 10 : 15;
-    const shortCount = totalM <= 25 ? 3 : totalM <= 50 ? 5 : 8;
-    const mcqMarks = qtypes.includes("mcq") ? Math.round(totalM * 0.4) : 0;
-    const shortMarks = qtypes.includes("short") ? totalM - mcqMarks : 0;
-
-    const prompt = `Create a Pakistani school exam paper in JSON format only.
-Topic: "${topicStr}" | Class: ${clsLabel} | Subject: ${subName} | Total: ${totalM} marks
-
-Return ONLY this JSON (no markdown, no explanation):
-{
-  "subject": "${subName}",
-  "class": "${clsLabel}",
-  "level": "${lvlName}",
-  "examType": "${examLabel}",
-  "topic": "${topicStr}",
-  "school": "${schoolName||"گورنمنٹ اسکول"}",
-  "totalMarks": ${totalM},
-  "time": "${timeStr}",
-  "instructions": ["تمام سوالات لازمی ہیں", "صاف لکھیں"],
-  "sections": [
-    ${qtypes.includes("mcq") ? `{
-      "type": "MCQ",
-      "title": "حصہ الف — کثیر انتخابی",
-      "marks": ${mcqMarks},
-      "instruction": "درست جواب پر دائرہ لگائیں",
-      "questions": [
-        {"no":1,"text":"[Urdu question about ${topicStr}]","options":["A. option1","B. option2","C. option3","D. option4"],"answer":"A","marks":1},
-        {"no":2,"text":"[Urdu question about ${topicStr}]","options":["A. option1","B. option2","C. option3","D. option4"],"answer":"B","marks":1},
-        {"no":3,"text":"[Urdu question about ${topicStr}]","options":["A. option1","B. option2","C. option3","D. option4"],"answer":"C","marks":1},
-        {"no":4,"text":"[Urdu question about ${topicStr}]","options":["A. option1","B. option2","C. option3","D. option4"],"answer":"A","marks":1},
-        {"no":5,"text":"[Urdu question about ${topicStr}]","options":["A. option1","B. option2","C. option3","D. option4"],"answer":"D","marks":1}
-      ]
-    }` : ""}
-    ${qtypes.includes("mcq") && qtypes.includes("short") ? "," : ""}
-    ${qtypes.includes("short") ? `{
-      "type": "SHORT",
-      "title": "حصہ ب — مختصر سوالات",
-      "marks": ${shortMarks},
-      "instruction": "مختصر جواب لکھیں",
-      "questions": [
-        {"no":1,"text":"[Short question about ${topicStr}]","marks":${Math.round(shortMarks/3)},"answer_hint":"brief answer"},
-        {"no":2,"text":"[Short question about ${topicStr}]","marks":${Math.round(shortMarks/3)},"answer_hint":"brief answer"},
-        {"no":3,"text":"[Short question about ${topicStr}]","marks":${Math.round(shortMarks/3)},"answer_hint":"brief answer"}
-      ]
-    }` : ""}
-  ]
-}
-
-Replace [Urdu question about ${topicStr}] with REAL Urdu questions. Replace option1/option2 etc with real options. Replace "brief answer" with real answer hints. Keep JSON valid.`;
+    // Split total marks evenly across selected question types
+    const n = qtypes.length;
+    const baseMarks = Math.floor(totalM / n);
+    const marksFor = {};
+    qtypes.forEach((qt,i)=>{ marksFor[qt] = i===n-1 ? (totalM - baseMarks*(n-1)) : baseMarks; });
 
     try {
       const apiKey = import.meta.env.VITE_ANTHROPIC_KEY;
@@ -329,62 +340,53 @@ Replace [Urdu question about ${topicStr}] with REAL Urdu questions. Replace opti
         return d.content?.[0]?.text||"";
       };
 
-      // Step 1: Get header info
+      // Step 1: Get header info (small, fast call)
       const headerPrompt = `Return ONLY this JSON for a Pakistani school exam paper (fill in values, no extra text):
 {"subject":"${subName}","class":"${clsLabel}","level":"${lvlName}","examType":"${examLabel}","topic":"${topicStr}","school":"${schoolName||"گورنمنٹ اسکول"}","totalMarks":${totalM},"time":"${timeStr}","instructions":["تمام سوالات حل کریں","صاف لکھیں","نقل سے پرہیز کریں"]}`;
-
       const headerTxt = await callAI(headerPrompt, 500);
-      const headerClean = headerTxt.replace(/```json|```/g,"").trim();
-      const header = JSON.parse(headerClean);
+      const header = repairJSON(headerTxt);
 
-      // Step 2: Get sections separately
+      // Step 2: Generate each selected section separately (small calls = no truncation)
       const sections = [];
-      const mcqM = Math.round(totalM * 0.4);
-      const shortM = Math.round(totalM * 0.35);
-      const longM = totalM - mcqM - shortM;
 
       if(qtypes.includes("mcq")) {
-        const mcqCount = totalM <= 25 ? 5 : totalM <= 50 ? 8 : 10;
-        const mcqPrompt = `Return ONLY a JSON array of ${mcqCount} MCQ questions about "${topicStr}" for class ${clsLabel} ${subName}. Each object: {"no":1,"text":"اردو سوال","options":["A. ","B. ","C. ","D. "],"answer":"A","marks":1}. Only JSON array, no extra text.`;
-        const mcqTxt = await callAI(mcqPrompt, 1500);
-        const mcqClean = mcqTxt.replace(/```json|```/g,"").trim();
-        const mcqQs = JSON.parse(mcqClean);
-        sections.push({
-          type:"MCQ",
-          title:"حصہ الف — کثیر انتخابی سوالات",
-          marks: mcqM,
-          instruction:"درست جواب کے سامنے دائرہ لگائیں",
-          questions: mcqQs
-        });
+        const cnt = totalM <= 25 ? 4 : totalM <= 50 ? 6 : 8;
+        const p = `Return ONLY a JSON array of exactly ${cnt} MCQ questions about "${topicStr}" for class ${clsLabel} ${subName}, difficulty ${diffStr}. Each object: {"no":1,"text":"اردو سوال","options":["A. ","B. ","C. ","D. "],"answer":"A","marks":1}. Keep each question text under 15 words. Only JSON array, no extra text, no markdown.`;
+        const qs = repairJSON(await callAI(p, 2000));
+        sections.push({type:"MCQ",title:"حصہ الف — کثیر انتخابی سوالات",marks:marksFor.mcq,
+          instruction:"درست جواب کے سامنے دائرہ لگائیں",questions:Array.isArray(qs)?qs:[]});
+      }
+
+      if(qtypes.includes("true_false")) {
+        const cnt = totalM <= 25 ? 4 : totalM <= 50 ? 6 : 8;
+        const p = `Return ONLY a JSON array of exactly ${cnt} True/False questions about "${topicStr}" for class ${clsLabel} ${subName}, difficulty ${diffStr}. Each object: {"no":1,"text":"اردو بیان","answer":"صحیح","marks":1}. answer must be "صحیح" or "غلط". Keep text under 15 words. Only JSON array, no extra text, no markdown.`;
+        const qs = repairJSON(await callAI(p, 1500));
+        sections.push({type:"TF",title:"حصہ — صحیح / غلط",marks:marksFor.true_false,
+          instruction:"درست جواب کے سامنے صحیح یا غلط لکھیں",questions:Array.isArray(qs)?qs:[]});
+      }
+
+      if(qtypes.includes("fill")) {
+        const cnt = totalM <= 25 ? 4 : totalM <= 50 ? 6 : 8;
+        const p = `Return ONLY a JSON array of exactly ${cnt} fill-in-the-blank questions about "${topicStr}" for class ${clsLabel} ${subName}, difficulty ${diffStr}. Each object: {"no":1,"text":"اردو جملہ ______ کے ساتھ خالی جگہ","answer_hint":"صحیح جواب","marks":1}. Keep text under 15 words. Only JSON array, no extra text, no markdown.`;
+        const qs = repairJSON(await callAI(p, 1500));
+        sections.push({type:"FILL",title:"حصہ — خالی جگہ پُر کریں",marks:marksFor.fill,
+          instruction:"خالی جگہ مناسب لفظ سے پُر کریں",questions:Array.isArray(qs)?qs:[]});
       }
 
       if(qtypes.includes("short")) {
-        const shortCount = totalM <= 25 ? 3 : totalM <= 50 ? 5 : 6;
-        const shortPrompt = `Return ONLY a JSON array of ${shortCount} short questions about "${topicStr}" for class ${clsLabel} ${subName}. Each object: {"no":1,"text":"اردو سوال","marks":${Math.round(shortM/(totalM<=25?3:totalM<=50?5:6))},"answer_hint":"مختصر جواب"}. Only JSON array, no extra text.`;
-        const shortTxt = await callAI(shortPrompt, 1000);
-        const shortClean = shortTxt.replace(/```json|```/g,"").trim();
-        const shortQs = JSON.parse(shortClean);
-        sections.push({
-          type:"SHORT",
-          title:"حصہ ب — مختصر سوالات",
-          marks: shortM,
-          instruction:"کسی بھی پانچ سوالات کے مختصر جواب لکھیں",
-          questions: shortQs
-        });
+        const cnt = totalM <= 25 ? 3 : totalM <= 50 ? 4 : 5;
+        const each = Math.max(1, Math.round(marksFor.short/cnt));
+        const p = `Return ONLY a JSON array of exactly ${cnt} short-answer questions about "${topicStr}" for class ${clsLabel} ${subName}, difficulty ${diffStr}. Each object: {"no":1,"text":"اردو سوال","marks":${each},"answer_hint":"مختصر جواب"}. Keep text short. Only JSON array, no extra text, no markdown.`;
+        const qs = repairJSON(await callAI(p, 1500));
+        sections.push({type:"SHORT",title:"حصہ — مختصر سوالات",marks:marksFor.short,
+          instruction:"مختصر جواب لکھیں",questions:Array.isArray(qs)?qs:[]});
       }
 
       if(qtypes.includes("long")) {
-        const longPrompt = `Return ONLY a JSON array of 2 long questions about "${topicStr}" for class ${clsLabel} ${subName}. Each object: {"no":1,"text":"اردو سوال","marks":${Math.round(longM/2)},"subparts":["(الف) حصہ","(ب) حصہ"],"answer_hint":"تفصیلی جواب"}. Only JSON array, no extra text.`;
-        const longTxt = await callAI(longPrompt, 800);
-        const longClean = longTxt.replace(/```json|```/g,"").trim();
-        const longQs = JSON.parse(longClean);
-        sections.push({
-          type:"LONG",
-          title:"حصہ ج — تفصیلی سوالات",
-          marks: longM,
-          instruction:"کسی بھی دو سوالات کے تفصیلی جواب لکھیں",
-          questions: longQs
-        });
+        const p = `Return ONLY a JSON array of exactly 2 long-answer questions about "${topicStr}" for class ${clsLabel} ${subName}, difficulty ${diffStr}. Each object: {"no":1,"text":"اردو سوال","marks":${Math.round(marksFor.long/2)},"subparts":["(الف) حصہ","(ب) حصہ"],"answer_hint":"تفصیلی جواب"}. Keep text short. Only JSON array, no extra text, no markdown.`;
+        const qs = repairJSON(await callAI(p, 1200));
+        sections.push({type:"LONG",title:"حصہ — تفصیلی سوالات",marks:marksFor.long,
+          instruction:"کسی بھی دو سوالات کے تفصیلی جواب لکھیں",questions:Array.isArray(qs)?qs:[]});
       }
 
       const parsed = {...header, sections};
