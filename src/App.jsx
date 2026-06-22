@@ -235,6 +235,7 @@ export default function App() {
 
   // Robust JSON repair - fixes truncated/malformed JSON from AI responses
   const repairJSON = (text) => {
+    if(!text||!text.trim()) throw new Error("AI نے خالی جواب دیا — دوبارہ کوشش کریں");
     let s = text.replace(/```json|```/g,"").trim();
     // Find the start of the actual JSON (array or object)
     const firstBrace = s.indexOf("{");
@@ -349,6 +350,8 @@ export default function App() {
               if(d.error) throw new Error(d.error.message);
               const txt = d.candidates?.[0]?.content?.parts?.[0]?.text||"";
               if(txt) return txt;
+              // Empty response - try next key
+              continue;
             } catch(e) {
               if(attempt === GEMINI_KEYS.length-1 && !ANTHROPIC_KEY) throw e;
             }
