@@ -292,10 +292,8 @@ export default function App() {
 
   const generate = async () => {
     const topicStr = sylMode==="custom" ? covered : topic;
-    if(!classId||!subject||!topicStr.trim()){
-      setError("کلاس، مضمون اور موضوع لازمی ہیں"); return;
-    }
-    if(qtypes.length===0){setError("کم از کم ایک سوال کی قسم چنیں"); return;}
+    if(!classId||!subject||!topicStr.trim()){setError("کلاس، مضمون اور موضوع لازمی ہیں");return;}
+    if(qtypes.length===0){setError("کم از کم ایک سوال کی قسم چنیں");return;}
 
     setError(""); setLoading(true); setPaper(null);
 
@@ -303,94 +301,161 @@ export default function App() {
     const clsLabel = classInfo?.label||classId;
     const lvlName  = {primary:"پرائمری",middle:"مڈل",high:"ہائی اسکول",inter:"انٹرمیڈیٹ"}[level]||"";
     const examLabel= EXAM_TYPES.find(e=>e.id===examType)?.label||"امتحان";
-    const totalM   = (examType&&examType!=="custom") ? EXAM_TYPES.find(e=>e.id===examType)?.marks : marks;
-    const timeStr  = (examType&&examType!=="custom") ? EXAM_TYPES.find(e=>e.id===examType)?.time  : "2 گھنٹے";
-    const diffStr  = diff==="easy"?"آسان":diff==="medium"?"درمیانہ":"مشکل";
+    const totalM   = (examType&&examType!=="custom")?EXAM_TYPES.find(e=>e.id===examType)?.marks:marks;
+    const timeStr  = (examType&&examType!=="custom")?EXAM_TYPES.find(e=>e.id===examType)?.time:"2 گھنٹے";
+    const diffStr  = diff==="easy"?"easy":diff==="medium"?"medium":"hard";
 
-    // Split total marks evenly across selected question types
+    // Marks split evenly
     const n = qtypes.length;
-    const baseMarks = Math.floor(totalM / n);
+    const baseM = Math.floor(totalM/n);
     const marksFor = {};
-    qtypes.forEach((qt,i)=>{ marksFor[qt] = i===n-1 ? (totalM - baseMarks*(n-1)) : baseMarks; });
+    qtypes.forEach((qt,i)=>{marksFor[qt]=i===n-1?(totalM-baseM*(n-1)):baseM;});
 
     try {
-      const apiKey = import.meta.env.VITE_ANTHROPIC_KEY;
-      if(!apiKey) {
-        setError("❌ API Key نہیں ملی — Vercel میں VITE_ANTHROPIC_KEY ڈالیں");
+      const GEMINI_KEYS = [
+        import.meta.env.VITE_GEMINI_KEY,
+        import.meta.env.VITE_GEMINI_KEY2,
+        import.meta.env.VITE_GEMINI_KEY3,
+      ].filter(Boolean);
+      const ANTHROPIC_KEY = import.meta.env.VITE_ANTHROPIC_KEY;
+
+      if(!GEMINI_KEYS.length && !ANTHROPIC_KEY){
+        setError("❌ کوئی API Key نہیں ملی — Vercel Settings میں ڈالیں");
         setLoading(false); return;
       }
 
-      const callAI = async (userPrompt, maxTok=1500) => {
-        const r = await fetch("https://api.anthropic.com/v1/messages", {
-          method:"POST",
-          headers:{
-            "Content-Type":"application/json",
-            "x-api-key": apiKey,
-            "anthropic-version":"2023-06-01",
-            "anthropic-dangerous-direct-browser-access":"true"
-          },
-          body: JSON.stringify({
-            model:"claude-haiku-4-5-20251001",
-            max_tokens: maxTok,
-            messages:[{role:"user", content: userPrompt}]
-          })
-        });
-        const d = await r.json();
-        if(d.error) throw new Error(d.error.message||"API Error");
-        return d.content?.[0]?.text||"";
+      // Smart API caller — Gemini first (free), Anthropic as backup
+      let geminiKeyIdx = 0;
+      const callAI = async (prompt, maxTok=1200) => {
+        // Try Gemini first (free)
+        if(GEMINI_KEYS.length > 0) {
+          for(let attempt=0; attempt < GEMINI_KEYS.length; attempt++) {
+            const key = GEMINI_KEYS[geminiKeyIdx % GEMINI_KEYS.length];
+            geminiKeyIdx++;
+            try {
+              const r = await fetch(
+                `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`,
+                {
+                  method:"POST",
+                  headers:{"Content-Type":"application/json"},
+                  body:JSON.stringify({
+                    contents:[{parts:[{text:prompt}]}],
+                    generationConfig:{temperature:0.4, maxOutputTokens:maxTok}
+                  })
+                }
+              );
+              const d = await r.json();
+              if(d.error && d.error.code===429) continue; // try next key
+              if(d.error) throw new Error(d.error.message);
+              const txt = d.candidates?.[0]?.content?.parts?.[0]?.text||"";
+              if(txt) return txt;
+            } catch(e) {
+              if(attempt === GEMINI_KEYS.length-1 && !ANTHROPIC_KEY) throw e;
+            }
+          }
+        }
+        // Fallback to Anthropic
+        if(ANTHROPIC_KEY) {
+          const r = await fetch("https://api.anthropic.com/v1/messages",{
+            method:"POST",
+            headers:{
+              "Content-Type":"application/json",
+              "x-api-key":ANTHROPIC_KEY,
+              "anthropic-version":"2023-06-01",
+              "anthropic-dangerous-direct-browser-access":"true"
+            },
+            body:JSON.stringify({
+              model:"claude-haiku-4-5-20251001",
+              max_tokens:maxTok,
+              messages:[{role:"user",content:prompt}]
+            })
+          });
+          const d = await r.json();
+          if(d.error) throw new Error(d.error.message||"Anthropic Error");
+          return d.content?.[0]?.text||"";
+        }
+        throw new Error("تمام API keys ناکام — دوبارہ کوشش کریں");
       };
 
-      // Step 1: Get header info (small, fast call)
-      const headerPrompt = `Return ONLY this JSON for a Pakistani school exam paper (fill in values, no extra text):
-{"subject":"${subName}","class":"${clsLabel}","level":"${lvlName}","examType":"${examLabel}","topic":"${topicStr}","school":"${schoolName||"گورنمنٹ اسکول"}","totalMarks":${totalM},"time":"${timeStr}","instructions":["تمام سوالات حل کریں","صاف لکھیں","نقل سے پرہیز کریں"]}`;
-      const headerTxt = await callAI(headerPrompt, 500);
-      const header = repairJSON(headerTxt);
-
-      // Step 2: Generate each selected section separately (small calls = no truncation)
       const sections = [];
+      const mcqCnt = totalM<=25?4:totalM<=50?5:7;
+      const shCnt  = totalM<=25?3:totalM<=50?4:5;
 
-      if(qtypes.includes("mcq")) {
-        const cnt = totalM <= 25 ? 4 : totalM <= 50 ? 6 : 8;
-        const p = `Return ONLY a JSON array of exactly ${cnt} MCQ questions about "${topicStr}" for class ${clsLabel} ${subName}, difficulty ${diffStr}. Each object: {"no":1,"text":"اردو سوال","options":["A. ","B. ","C. ","D. "],"answer":"A","marks":1}. Keep each question text under 15 words. Only JSON array, no extra text, no markdown.`;
-        const qs = repairJSON(await callAI(p, 2000));
-        sections.push({type:"MCQ",title:"حصہ الف — کثیر انتخابی سوالات",marks:marksFor.mcq,
-          instruction:"درست جواب کے سامنے دائرہ لگائیں",questions:Array.isArray(qs)?qs:[]});
+      // CALL 1: Header + MCQ (if selected) — combined to save tokens
+      const hasMCQ = qtypes.includes("mcq");
+      const hasTF  = qtypes.includes("true_false");
+      const hasFill= qtypes.includes("fill");
+      const hasSh  = qtypes.includes("short");
+      const hasLong= qtypes.includes("long");
+
+      const call1Parts = [];
+      if(hasMCQ) call1Parts.push(`"mcq":[${Array.from({length:mcqCnt},(_,i)=>`{"no":${i+1},"text":"Q","options":["A. ","B. ","C. ","D. "],"answer":"A","marks":1}`).join(",")}]`);
+      if(hasTF)  call1Parts.push(`"tf":[${Array.from({length:5},(_,i)=>`{"no":${i+1},"text":"statement","answer":"صحیح","marks":1}`).join(",")}]`);
+      if(hasFill)call1Parts.push(`"fill":[${Array.from({length:5},(_,i)=>`{"no":${i+1},"text":"sentence with ______","answer_hint":"word","marks":1}`).join(",")}]`);
+
+      const prompt1 = `Pakistani school exam. Topic:"${topicStr}" Class:${clsLabel} Subject:${subName} Difficulty:${diffStr}.
+Return ONLY JSON (no markdown): {"subject":"${subName}","class":"${clsLabel}","level":"${lvlName}","examType":"${examLabel}","topic":"${topicStr}","school":"${schoolName||"گورنمنٹ اسکول"}","totalMarks":${totalM},"time":"${timeStr}","instructions":["تمام سوالات حل کریں","صاف لکھیں"]${call1Parts.length?","+call1Parts.join(","):""}}.
+Replace placeholder questions with REAL Urdu questions about "${topicStr}". Keep JSON valid and complete.`;
+
+      const txt1 = await callAI(prompt1, 2000);
+      const data1 = repairJSON(txt1);
+
+      // Extract header
+      const header = {
+        subject:data1.subject||subName,
+        class:data1.class||clsLabel,
+        level:data1.level||lvlName,
+        examType:data1.examType||examLabel,
+        topic:data1.topic||topicStr,
+        school:data1.school||(schoolName||"گورنمنٹ اسکول"),
+        totalMarks:data1.totalMarks||totalM,
+        time:data1.time||timeStr,
+        instructions:data1.instructions||["تمام سوالات حل کریں","صاف لکھیں"]
+      };
+
+      // Extract MCQ/TF/Fill from first call
+      if(hasMCQ && Array.isArray(data1.mcq)) {
+        sections.push({type:"MCQ",title:"حصہ الف — کثیر انتخابی سوالات",
+          marks:marksFor.mcq,instruction:"درست جواب کے سامنے دائرہ لگائیں",
+          questions:data1.mcq});
+      }
+      if(hasTF && Array.isArray(data1.tf)) {
+        sections.push({type:"TF",title:"حصہ — صحیح / غلط",
+          marks:marksFor.true_false,instruction:"صحیح یا غلط لکھیں",
+          questions:data1.tf});
+      }
+      if(hasFill && Array.isArray(data1.fill)) {
+        sections.push({type:"FILL",title:"حصہ — خالی جگہ پُر کریں",
+          marks:marksFor.fill,instruction:"مناسب لفظ سے خالی جگہ پُر کریں",
+          questions:data1.fill});
       }
 
-      if(qtypes.includes("true_false")) {
-        const cnt = totalM <= 25 ? 4 : totalM <= 50 ? 6 : 8;
-        const p = `Return ONLY a JSON array of exactly ${cnt} True/False questions about "${topicStr}" for class ${clsLabel} ${subName}, difficulty ${diffStr}. Each object: {"no":1,"text":"اردو بیان","answer":"صحیح","marks":1}. answer must be "صحیح" or "غلط". Keep text under 15 words. Only JSON array, no extra text, no markdown.`;
-        const qs = repairJSON(await callAI(p, 1500));
-        sections.push({type:"TF",title:"حصہ — صحیح / غلط",marks:marksFor.true_false,
-          instruction:"درست جواب کے سامنے صحیح یا غلط لکھیں",questions:Array.isArray(qs)?qs:[]});
-      }
+      // CALL 2: Short + Long (if selected) — combined
+      if(hasSh || hasLong) {
+        const call2Parts = [];
+        if(hasSh)  call2Parts.push(`"short":[${Array.from({length:shCnt},(_,i)=>`{"no":${i+1},"text":"Q","marks":${Math.round(marksFor.short/shCnt)},"answer_hint":"ans"}`).join(",")}]`);
+        if(hasLong)call2Parts.push(`"long":[{"no":1,"text":"Q","marks":${Math.round(marksFor.long/2)},"subparts":["(الف)","(ب)"],"answer_hint":"ans"},{"no":2,"text":"Q","marks":${Math.round(marksFor.long/2)},"subparts":["(الف)","(ب)"],"answer_hint":"ans"}]`);
 
-      if(qtypes.includes("fill")) {
-        const cnt = totalM <= 25 ? 4 : totalM <= 50 ? 6 : 8;
-        const p = `Return ONLY a JSON array of exactly ${cnt} fill-in-the-blank questions about "${topicStr}" for class ${clsLabel} ${subName}, difficulty ${diffStr}. Each object: {"no":1,"text":"اردو جملہ ______ کے ساتھ خالی جگہ","answer_hint":"صحیح جواب","marks":1}. Keep text under 15 words. Only JSON array, no extra text, no markdown.`;
-        const qs = repairJSON(await callAI(p, 1500));
-        sections.push({type:"FILL",title:"حصہ — خالی جگہ پُر کریں",marks:marksFor.fill,
-          instruction:"خالی جگہ مناسب لفظ سے پُر کریں",questions:Array.isArray(qs)?qs:[]});
-      }
+        const prompt2 = `Pakistani school exam questions. Topic:"${topicStr}" Class:${clsLabel} Subject:${subName} Difficulty:${diffStr}.
+Return ONLY JSON (no markdown): {${call2Parts.join(",")}}.
+Replace placeholder Q with REAL Urdu questions about "${topicStr}". Keep short. JSON must be complete and valid.`;
 
-      if(qtypes.includes("short")) {
-        const cnt = totalM <= 25 ? 3 : totalM <= 50 ? 4 : 5;
-        const each = Math.max(1, Math.round(marksFor.short/cnt));
-        const p = `Return ONLY a JSON array of exactly ${cnt} short-answer questions about "${topicStr}" for class ${clsLabel} ${subName}, difficulty ${diffStr}. Each object: {"no":1,"text":"اردو سوال","marks":${each},"answer_hint":"مختصر جواب"}. Keep text short. Only JSON array, no extra text, no markdown.`;
-        const qs = repairJSON(await callAI(p, 1500));
-        sections.push({type:"SHORT",title:"حصہ — مختصر سوالات",marks:marksFor.short,
-          instruction:"مختصر جواب لکھیں",questions:Array.isArray(qs)?qs:[]});
-      }
+        const txt2 = await callAI(prompt2, 1500);
+        const data2 = repairJSON(txt2);
 
-      if(qtypes.includes("long")) {
-        const p = `Return ONLY a JSON array of exactly 2 long-answer questions about "${topicStr}" for class ${clsLabel} ${subName}, difficulty ${diffStr}. Each object: {"no":1,"text":"اردو سوال","marks":${Math.round(marksFor.long/2)},"subparts":["(الف) حصہ","(ب) حصہ"],"answer_hint":"تفصیلی جواب"}. Keep text short. Only JSON array, no extra text, no markdown.`;
-        const qs = repairJSON(await callAI(p, 1200));
-        sections.push({type:"LONG",title:"حصہ — تفصیلی سوالات",marks:marksFor.long,
-          instruction:"کسی بھی دو سوالات کے تفصیلی جواب لکھیں",questions:Array.isArray(qs)?qs:[]});
+        if(hasSh && Array.isArray(data2.short)) {
+          sections.push({type:"SHORT",title:"حصہ ب — مختصر سوالات",
+            marks:marksFor.short,instruction:"مختصر جواب لکھیں",
+            questions:data2.short});
+        }
+        if(hasLong && Array.isArray(data2.long)) {
+          sections.push({type:"LONG",title:"حصہ ج — تفصیلی سوالات",
+            marks:marksFor.long,instruction:"تفصیلی جواب لکھیں",
+            questions:data2.long});
+        }
       }
 
       const parsed = {...header, sections};
-
       setPaper(parsed);
       setAnswers({}); setSubmitted(false); setScore(null);
       setShowAns(false); setPracticeMode(false);
@@ -399,7 +464,7 @@ export default function App() {
       setScreen("preview");
 
     } catch(e) {
-      setError("❌ مسئلہ: " + (e.message||"نامعلوم") + " — دوبارہ کوشش کریں");
+      setError("❌ مسئلہ: "+(e.message||"نامعلوم")+" — دوبارہ کوشش کریں");
     }
     setLoading(false);
   };
