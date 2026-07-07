@@ -207,6 +207,9 @@ export default function App() {
   const [role,        setRole]        = useState(null);
   const [classId,     setClassId]     = useState(null);
   const [subject,     setSubject]     = useState(null);
+  const [chapters,    setChapters]    = useState([]);
+  const [chapter,     setChapter]     = useState(null);
+  const [chapLoading, setChapLoading] = useState(false);
   const [examType,    setExamType]    = useState(null);
   const [topic,       setTopic]       = useState("");
   const [sylMode,     setSylMode]     = useState("topic");
@@ -232,6 +235,27 @@ export default function App() {
   const roleInfo  = USER_ROLES.find(r=>r.id===role);
 
   const toggleQ = id => setQtypes(p=>p.includes(id)?p.filter(x=>x!==id):[...p,id]);
+
+  // Fetch chapters from Supabase when subject is selected
+  const fetchChapters = async (classId, subjectId) => {
+    setChapters([]); setChapter(null); setChapLoading(true);
+    try {
+      const SUPA_URL = import.meta.env.VITE_SUPABASE_URL;
+      const SUPA_KEY = import.meta.env.VITE_SUPABASE_KEY;
+      if(!SUPA_URL || !SUPA_KEY) { setChapLoading(false); return; }
+      const res = await fetch(
+        `${SUPA_URL}/rest/v1/chapters?class=eq.${classId}&subject=eq.${subjectId}&order=chapter_no.asc`,
+        { headers: {
+          "apikey": SUPA_KEY,
+          "Authorization": `Bearer ${SUPA_KEY}`,
+          "Content-Type": "application/json"
+        }}
+      );
+      const data = await res.json();
+      if(Array.isArray(data)) setChapters(data);
+    } catch(e) { console.error("Chapters fetch error:", e); }
+    setChapLoading(false);
+  };
 
   // Robust JSON repair - fixes truncated/malformed JSON from AI responses
   const repairJSON = (text) => {
@@ -292,7 +316,9 @@ export default function App() {
   };
 
   const generate = async () => {
-    const topicStr = sylMode==="custom" ? covered : topic;
+    const topicStr = chapter 
+      ? `${chapter.chapter_name} (باب ${chapter.chapter_no})`
+      : sylMode==="custom" ? covered : topic;
     if(!classId||!subject||!topicStr.trim()){setError("کلاس، مضمون اور موضوع لازمی ہیں");return;}
     if(qtypes.length===0){setError("کم از کم ایک سوال کی قسم چنیں");return;}
 
@@ -396,7 +422,8 @@ export default function App() {
       if(hasTF)  call1Parts.push(`"tf":[${Array.from({length:5},(_,i)=>`{"no":${i+1},"text":"statement","answer":"صحیح","marks":1}`).join(",")}]`);
       if(hasFill)call1Parts.push(`"fill":[${Array.from({length:5},(_,i)=>`{"no":${i+1},"text":"sentence with ______","answer_hint":"word","marks":1}`).join(",")}]`);
 
-      const prompt1 = `Pakistani school exam. Topic:"${topicStr}" Class:${clsLabel} Subject:${subName} Difficulty:${diffStr}.
+      const pdfPath = chapter ? chapter.pdf_path : null;
+    const prompt1 = `Pakistani school exam. Topic:"${topicStr}" Class:${clsLabel} Subject:${subName} Difficulty:${diffStr}.
 Return ONLY JSON (no markdown): {"subject":"${subName}","class":"${clsLabel}","level":"${lvlName}","examType":"${examLabel}","topic":"${topicStr}","school":"${schoolName||"گورنمنٹ اسکول"}","totalMarks":${totalM},"time":"${timeStr}","instructions":["تمام سوالات حل کریں","صاف لکھیں"]${call1Parts.length?","+call1Parts.join(","):""}}.
 Replace placeholder questions with REAL Urdu questions about "${topicStr}". Keep JSON valid and complete.`;
 
@@ -605,7 +632,7 @@ Replace placeholder Q with REAL Urdu questions about "${topicStr}". Keep short. 
                 <div style={S.row}>
                   {gc.map(c=>(
                     <button key={c.id} className={`chip${classId===c.id?" on":""}`}
-                      onClick={()=>{setClassId(c.id);setSubject(null);}}
+                      onClick={()=>{setClassId(c.id);setSubject(null);setChapter(null);setChapters([]);}}
                       style={classId===c.id?{borderColor:col,color:col,background:col+"15"}:{}}>
                       {c.label}
                     </button>
@@ -623,12 +650,51 @@ Replace placeholder Q with REAL Urdu questions about "${topicStr}". Keep short. 
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
               {subs.map(s=>(
                 <button key={s.id} className={`subj${subject===s.id?" on":""}`}
-                  onClick={()=>setSubject(s.id)}>
+                  onClick={()=>{setSubject(s.id);fetchChapters(classId,s.id);}}>
                   <span style={{fontSize:22}}>{s.icon}</span>
                   <span style={{fontSize:11,color:"#777"}}>{s.name}</span>
                 </button>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* CHAPTERS */}
+        {subject&&(
+          <div style={S.sec} className="up">
+            <label style={S.lbl}>📖 باب منتخب کریں</label>
+            {chapLoading&&(
+              <div style={{textAlign:"center",color:"#42A5F5",padding:"10px"}}>
+                <span className="spin"/> ابواب لوڈ ہو رہے ہیں...
+              </div>
+            )}
+            {!chapLoading&&chapters.length>0&&(
+              <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                <button
+                  className={`chip${chapter===null?" on":""}`}
+                  onClick={()=>setChapter(null)}
+                  style={{textAlign:"right",padding:"10px 14px",borderRadius:12,
+                    ...(chapter===null?{borderColor:"#42A5F5",color:"#42A5F5",background:"#1565C022"}:{})}}>
+                  📚 تمام کتاب (سب ابواب سے)
+                </button>
+                {chapters.map(ch=>(
+                  <button key={ch.id}
+                    className={`chip${chapter?.id===ch.id?" on":""}`}
+                    onClick={()=>setChapter(ch)}
+                    style={{textAlign:"right",padding:"10px 14px",borderRadius:12,
+                      display:"flex",alignItems:"center",gap:10,
+                      ...(chapter?.id===ch.id?{borderColor:"#42A5F5",color:"#42A5F5",background:"#1565C022"}:{})}}>
+                    <span style={{color:"#555",fontSize:12,flexShrink:0}}>{ch.chapter_no}.</span>
+                    <span style={{flex:1}}>{ch.chapter_name}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            {!chapLoading&&chapters.length===0&&(
+              <div style={{color:"#555",fontSize:12,textAlign:"center",padding:"10px",direction:"rtl"}}>
+                ابھی اس مضمون کے ابواب دستیاب نہیں — موضوع خود لکھیں
+              </div>
+            )}
           </div>
         )}
 
