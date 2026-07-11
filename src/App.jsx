@@ -339,10 +339,8 @@ export default function App() {
     qtypes.forEach((qt,i)=>{marksFor[qt]=i===n-1?(totalM-baseM*(n-1)):baseM;});
 
     try {
-      const GEMINI_KEYS = [
+      const GEMINI_KEY = [
         import.meta.env.VITE_GEMINI_KEY,
-        import.meta.env.VITE_GEMINI_KEY2,
-        import.meta.env.VITE_GEMINI_KEY3,
       ].filter(Boolean);
       const ANTHROPIC_KEY = import.meta.env.VITE_ANTHROPIC_KEY;
 
