@@ -339,71 +339,45 @@ export default function App() {
     qtypes.forEach((qt,i)=>{marksFor[qt]=i===n-1?(totalM-baseM*(n-1)):baseM;});
 
     try {
-      const GEMINI_KEYS = [
-        import.meta.env.VITE_GEMINI_KEY,
-        import.meta.env.VITE_GEMINI_KEY2,
-        import.meta.env.VITE_GEMINI_KEY3,
-      ].filter(Boolean);
-      const ANTHROPIC_KEY = import.meta.env.VITE_ANTHROPIC_KEY;
+      const KEY1 = import.meta.env.VITE_GEMINI_KEY;
+      const KEY2 = import.meta.env.VITE_GEMINI_KEY2;
+      const KEY3 = import.meta.env.VITE_GEMINI_KEY3;
+      const KEYS = [KEY1, KEY2, KEY3].filter(k => k && k.length > 5);
 
-      if(!GEMINI_KEYS.length && !ANTHROPIC_KEY){
-        setError("❌ کوئی API Key نہیں ملی — Vercel Settings میں ڈالیں");
+      if(KEYS.length === 0){
+        setError("❌ Gemini API Key نہیں ملی — Vercel میں VITE_GEMINI_KEY ڈالیں");
         setLoading(false); return;
       }
 
-      // Smart API caller — Gemini first (free), Anthropic as backup
-      let geminiKeyIdx = 0;
+      let keyIdx = 0;
       const callAI = async (prompt, maxTok=1200) => {
-        // Try Gemini first (free)
-        if(GEMINI_KEYS.length > 0) {
-          for(let attempt=0; attempt < GEMINI_KEYS.length; attempt++) {
-            const key = GEMINI_KEYS[geminiKeyIdx % GEMINI_KEYS.length];
-            geminiKeyIdx++;
-            try {
-              const r = await fetch(
-                `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`,
-                {
-                  method:"POST",
-                  headers:{"Content-Type":"application/json"},
-                  body:JSON.stringify({
-                    contents:[{parts:[{text:prompt}]}],
-                    generationConfig:{temperature:0.4, maxOutputTokens:maxTok}
-                  })
-                }
-              );
-              const d = await r.json();
-              if(d.error && d.error.code===429) continue; // try next key
-              if(d.error) throw new Error(d.error.message);
-              const txt = d.candidates?.[0]?.content?.parts?.[0]?.text||"";
-              if(txt) return txt;
-              // Empty response - try next key
-              continue;
-            } catch(e) {
-              if(attempt === GEMINI_KEYS.length-1 && !ANTHROPIC_KEY) throw e;
+        for(let i=0; i < KEYS.length; i++){
+          const key = KEYS[keyIdx % KEYS.length];
+          keyIdx++;
+          try {
+            const r = await fetch(
+              `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`,
+              {
+                method:"POST",
+                headers:{"Content-Type":"application/json"},
+                body:JSON.stringify({
+                  contents:[{parts:[{text:prompt}]}],
+                  generationConfig:{temperature:0.4, maxOutputTokens:maxTok}
+                })
+              }
+            );
+            const d = await r.json();
+            if(d.error){
+              if(d.error.code===429) continue;
+              throw new Error(d.error.message||"Gemini Error");
             }
+            const txt = d.candidates?.[0]?.content?.parts?.[0]?.text||"";
+            if(txt) return txt;
+          } catch(e) {
+            if(i === KEYS.length-1) throw e;
           }
         }
-        // Fallback to Anthropic
-        if(ANTHROPIC_KEY) {
-          const r = await fetch("https://api.anthropic.com/v1/messages",{
-            method:"POST",
-            headers:{
-              "Content-Type":"application/json",
-              "x-api-key":ANTHROPIC_KEY,
-              "anthropic-version":"2023-06-01",
-              "anthropic-dangerous-direct-browser-access":"true"
-            },
-            body:JSON.stringify({
-              model:"claude-haiku-4-5-20251001",
-              max_tokens:maxTok,
-              messages:[{role:"user",content:prompt}]
-            })
-          });
-          const d = await r.json();
-          if(d.error) throw new Error(d.error.message||"Anthropic Error");
-          return d.content?.[0]?.text||"";
-        }
-        throw new Error("تمام API keys ناکام — دوبارہ کوشش کریں");
+        throw new Error("تمام Gemini keys ناکام — دوبارہ کوشش کریں");
       };
 
       const sections = [];
